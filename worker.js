@@ -1,105 +1,115 @@
-// Auravia transcription worker. Models run off the UI thread.
-// Transformers.js v3.7.2 is pinned to avoid surprise CDN upgrades.
+// Auravia transcription worker (v2). Models run off the UI thread.
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2";
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
-env.backends.onnx.wasm.proxy = false;
 
-let asrPipeline = null;
+const SLICE_SECONDS = 30;
+const RATE = 16000;
+const isMobile = /Android|iPhone|iPad|Mobile/i.test((self.navigator && self.navigator.userAgent) || "");
+
+let asr = null;
 let loadedModel = "";
+let loadedDevice = "";
 
 const send = (data) => self.postMessage(data);
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function onDownload(p) {
+  if (p.status === "progress") {
+    send({type: "download", progress: p.progress || 0, file: p.file || "", status: p.status});
+  } else if (p.status === "done") {
+    send({type: "download", progress: 100, file: p.file || "", status: "done"});
+  } else if (p.status === "initiate" || p.status === "download") {
+    send({type: "status", percent: 0, title: "Preparing the listening room…", message: "Downloading model files. The first time can take a few minutes.", label: "Model download"});
+  }
+}
+
+async function loadModel(model) {
+  if (asr && loadedModel === model) return;
+  asr = null;
+  if (!isMobile && self.navigator && self.navigator.gpu) {
+    try {
+      const adapter = await self.navigator.gpu.requestAdapter();
+      if (adapter) {
+        asr = await pipeline("automatic-speech-recognition", model, {
+          device: "webgpu",
+          dtype: {encoder_model: "fp32", decoder_model_merged: "q4"},
+          progress_callback: onDownload
+        });
+        loadedDevice = "WebGPU";
+      }
+    } catch (e) {
+      asr = null;
+    }
+  }
+  if (!asr) {
+    asr = await pipeline("automatic-speech-recognition", model, {
+      device: "wasm",
+      dtype: "q8",
+      progress_callback: onDownload
+    });
+    loadedDevice = "WASM";
+  }
+  loadedModel = model;
+}
 
 self.onmessage = async ({data}) => {
   if (data.type !== "transcribe") return;
   try {
-    const {audio, sampleRate, model, language, style, translate, speakers} = data;
-    if (!(audio instanceof Float32Array) || sampleRate !== 16000) {
-      throw new Error("Audio preparation failed. Expected mono Float32 audio resampled to 16 kHz.");
+    const {audio, sampleRate, model, language, style, translate, speakers, duration} = data;
+    if (!(audio instanceof Float32Array) || sampleRate !== RATE) {
+      throw new Error("Audio preparation failed. Expected mono Float32 audio at 16 kHz.");
     }
-    if (data.duration > 900) throw new Error("This file is longer than 15 minutes. Please trim it into shorter recordings.");
-    if (speakers) send({type:"status", percent:0, title:"One limitation to know", message:"Speaker diarization is not available in this browser build. Whisper transcription will continue without automatic speaker labels.", label:"Speaker detection"});
-    if (!asrPipeline || loadedModel !== model) {
-      send({type:"status", percent:0, title:"Preparing the listening room…", message:"Loading the open-source Whisper model. The first download can take a while.", label:"Model download"});
-      asrPipeline = await pipeline("automatic-speech-recognition", model, {
-        device: await chooseDevice(),
-        dtype: "q8",
-        progress_callback: (p) => {
-          if (p.status === "progress") {
-            send({type:"download", progress: p.progress || 0, file: p.file || "", status: p.status});
-          } else if (p.status === "done") {
-            send({type:"download", progress:100, file:p.file || "", status:"done"});
-          } else if (p.status === "initiate" || p.status === "download") {
-            send({type:"status", percent:0, title:"Preparing the listening room…", message:`${p.status === "initiate" ? "Starting" : "Downloading"} model files from the CDN.`, label:"Model download"});
-          }
-        }
-      });
-      loadedModel = model;
-    }
-    send({type:"status", percent:2, title:"Listening to the stars…", message:"Whisper is listening to your recording in chunks.", label:"Transcription"});
-    // Whisper's chunked ASR pipeline handles long recordings without passing the full
-    // recording through the model in one inference window.
-    const opts = {
-      chunk_length_s: 30,
-      stride_length_s: 5,
-      return_timestamps: true,
-      task: translate ? "translate" : "transcribe"
-    };
+    if (duration > 900) throw new Error("This file is longer than 15 minutes. Please trim it into shorter recordings.");
+
+    send({type: "status", percent: 0, title: "Preparing the listening room…", message: "Loading the Whisper model.", label: "Model setup"});
+    await loadModel(model);
+
+    const sliceLen = SLICE_SECONDS * RATE;
+    const total = Math.max(1, Math.ceil(audio.length / sliceLen));
+    const opts = {task: translate ? "translate" : "transcribe", return_timestamps: true};
     if (language && language !== "auto") opts.language = language;
-    // Prompting is best-effort only; generation support varies by Transformers.js model.
-    if (style === "full") opts.prompt = "Umm, uh, so, like, you know, I mean, well...";
-    const result = await asrPipeline(audio, {
-      ...opts,
-      callback_function: (chunks) => {
-        // Chunk callback shape varies by pipeline version; treat this as a best-effort update.
-        if (Array.isArray(chunks) && chunks.length) {
-          const pct = clamp((chunks.length * 30 / Math.max(1, data.duration))*100, 3, 95);
-          send({type:"progress", percent:pct, message:"Writing your words…"});
-        }
+
+    send({type: "progress", percent: 3, message: `Starting (${loadedDevice} mode). Part 1 of ${total}…`});
+
+    const segments = [];
+    for (let i = 0; i < total; i++) {
+      const from = i * sliceLen;
+      const slice = audio.subarray(from, Math.min(audio.length, from + sliceLen));
+      const offset = i * SLICE_SECONDS;
+      const sliceDur = slice.length / RATE;
+      send({type: "progress", percent: 3 + (i / total) * 92, message: `Listening to part ${i + 1} of ${total}…`});
+      if (slice.length < RATE) continue;
+
+      const out = await asr(slice, opts);
+      let chunks = Array.isArray(out.chunks) ? out.chunks : [];
+      if (!chunks.length && out.text) chunks = [{text: out.text, timestamp: [0, sliceDur]}];
+      for (const c of chunks) {
+        const text = (c.text || "").trim();
+        if (!text) continue;
+        const ts = Array.isArray(c.timestamp) ? c.timestamp : [0, sliceDur];
+        const s = Number.isFinite(ts[0]) ? ts[0] : 0;
+        const e = Number.isFinite(ts[1]) ? ts[1] : sliceDur;
+        segments.push({start: offset + s, end: offset + e, text, speaker: ""});
       }
-    });
-    let chunks = result.chunks || [];
-    if (!chunks.length && result.text) chunks = [{text:result.text, timestamp:[0, data.duration]}];
-    const segments = chunks.map((c, i) => {
-      const ts = Array.isArray(c.timestamp) ? c.timestamp : [null, null];
-      return {
-        start: Number.isFinite(ts[0]) ? ts[0] : (i ? chunks[i-1].timestamp?.[1] || 0 : 0),
-        end: Number.isFinite(ts[1]) ? ts[1] : Math.min(data.duration, (i+1)*30),
-        text: (c.text || "").trim(),
-        speaker: ""
-      };
-    }).filter(s => s.text);
-    if (!segments.length && result.text) segments.push({start:0,end:data.duration,text:result.text.trim(),speaker:""});
+    }
+
+    send({type: "progress", percent: 99, message: "Almost there…"});
     send({
-      type:"progress", percent:99, message:"Almost there…"
-    });
-    send({
-      type:"result", segments, device: "Whisper · local browser inference",
+      type: "result",
+      segments,
+      device: `Whisper · ${loadedDevice}`,
       note: speakers
-        ? "Transcript ready. Automatic speaker diarization is not available in this build, so speaker labels were not generated. You can edit text manually."
+        ? "Transcript ready. Automatic speaker labels are not available in this build. You can edit the text manually."
         : (style === "full"
-          ? "Transcript ready. The prompt may encourage fillers, but Whisper can still omit or normalize disfluencies."
-          : "Transcript ready. Clean verbatim removes common English fillers after transcription; this may occasionally remove a word you wanted to keep.")
+          ? "Transcript ready. Whisper may still skip or tidy fillers even in full verbatim."
+          : "Transcript ready. Clean verbatim removes common English fillers after transcription.")
     });
   } catch (err) {
-    let message = err?.message || String(err);
+    let message = (err && err.message) || String(err);
     if (/out of memory|memory allocation|wasm memory|allocation failed/i.test(message)) {
-      message = "Auravia ran out of available memory. Try the Tiny model, close other tabs, or split the recording into shorter files.";
-    } else if (/unsupported|not supported|decode/i.test(message)) {
-      message = `This audio could not be processed: ${message}`;
+      message = "Auravia ran out of memory. Try the Tiny model, close other tabs, or use a shorter file.";
     }
-    send({type:"error", message});
+    send({type: "error", message});
   }
 };
-
-async function chooseDevice() {
-  try {
-    if (typeof navigator !== "undefined" && navigator.gpu) {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (adapter) return "webgpu";
-    }
-  } catch (_) {}
-  return "wasm";
-}
