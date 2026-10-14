@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B0A1F">
+  <title>Auravia — Where voices become words</title>
+  <meta name="description" content="Private, free, in-browser audio transcription with Whisper.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true">
+    <div class="nebula nebula-one"></div><div class="nebula nebula-two"></div>
+    <canvas id="starfield"></canvas><div class="shooting-star"></div>
+  </div>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Auravia home">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span><span class="brand-name">Auravia</span><span class="tagline">Where voices become words</span></span>
+    </a>
+    <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme"><span id="themeIcon">☼</span><span class="theme-label">Dawn mode</span></button>
+  </header>
+
+  <main class="shell">
+    <section class="intro">
+      <div class="eyebrow"><span class="eyebrow-dot"></span> YOUR PRIVATE AUDIO SANCTUARY</div>
+      <h1>Let every voice<br><em>find its words.</em></h1>
+      <p class="intro-copy">A quiet space to turn recordings into text. Your audio stays in your browser; no account or API key needed.</p>
+    </section>
+
+    <section class="glass-card upload-card" aria-labelledby="uploadTitle">
+      <div class="section-heading"><span class="step">01</span><div><h2 id="uploadTitle">Bring a recording</h2><p>Choose an audio or video file to begin.</p></div></div>
+      <input id="fileInput" type="file" accept=".mp3,.wav,.m4a,.ogg,.mp4,audio/*,video/mp4" hidden>
+      <button id="dropZone" class="drop-zone" type="button" aria-label="Choose audio or video file">
+        <span class="portal"><span class="portal-core">♫</span><i class="orbit orbit-a"></i><i class="orbit orbit-b"></i></span>
+        <span class="drop-title" id="dropTitle">Drop your file into the orbit</span>
+        <span class="drop-subtitle">or <span class="underlined">browse your device</span></span>
+        <span class="file-types">MP3 · WAV · M4A · OGG · MP4</span>
+      </button>
+      <div id="fileMeta" class="file-meta" hidden><span class="file-icon">♫</span><span class="file-details"><strong id="fileName"></strong><small id="fileDuration"></small></span><button id="removeFile" class="icon-button" type="button" aria-label="Remove selected file">×</button></div>
+      <div id="durationWarning" class="notice warning" role="status" hidden></div>
+      <div id="fileError" class="notice error" role="alert" hidden></div>
+    </section>
+
+    <section class="glass-card options-card" aria-labelledby="optionsTitle">
+      <div class="section-heading"><span class="step">02</span><div><h2 id="optionsTitle">Shape your transcript</h2><p>Set your preferences before listening begins.</p></div></div>
+      <div class="options-grid">
+        <div class="field full-width">
+          <label for="language">Spoken language</label>
+          <select id="language">
+            <option value="auto">Auto-detect</option><option value="english">English</option><option value="hindi">Hindi</option><option value="tamil">Tamil</option><option value="telugu">Telugu</option><option value="malayalam">Malayalam</option><option value="kannada">Kannada</option><option value="korean">Korean</option><option value="japanese">Japanese</option><option value="spanish">Spanish</option><option value="french">French</option><option value="german">German</option><option value="italian">Italian</option><option value="portuguese">Portuguese</option><option value="chinese">Chinese</option><option value="arabic">Arabic</option><option value="russian">Russian</option><option value="indonesian">Indonesian</option><option value="thai">Thai</option><option value="turkish">Turkish</option><option value="dutch">Dutch</option><option value="polish">Polish</option><option value="ukrainian">Ukrainian</option><option value="swedish">Swedish</option><option value="finnish">Finnish</option><option value="vietnamese">Vietnamese</option>
+          </select>
+        </div>
+        <div class="field full-width">
+          <label for="model">Whisper model <span class="subtle-label">larger = often more accurate, slower</span></label>
+          <select id="model"><option value="Xenova/whisper-tiny">Tiny · fastest</option><option value="Xenova/whisper-base" selected>Base · balanced (default)</option><option value="Xenova/whisper-small">Small · more capable, needs more memory</option></select>
+        </div>
+        <fieldset class="field full-width"><legend>Transcript style</legend><div class="choice-row">
+          <label class="choice"><input type="radio" name="style" value="clean" checked><span class="choice-dot"></span><span><strong>Clean verbatim</strong><small>Gently removes common English fillers and stutters.</small></span></label>
+          <label class="choice"><input type="radio" name="style" value="full"><span class="choice-dot"></span><span><strong>Full verbatim</strong><small>Preserves what Whisper recognizes, including repetitions.</small></span></label>
+        </div><p class="helper-note">Whisper may omit or normalize disfluencies. A prompt can encourage them, but cannot guarantee word-for-word capture.</p></fieldset>
+        <div class="toggle-row">
+          <div><strong>Timestamps</strong><small>Add a time to each transcript segment.</small></div>
+          <label class="switch"><input id="timestamps" type="checkbox" checked><span class="switch-track"></span><span class="sr-only">Include timestamps</span></label>
+        </div>
+        <div class="toggle-row">
+          <div><strong>Speaker labels</strong><small>Label speakers when diarization is available.</small></div>
+          <label class="switch"><input id="speakers" type="checkbox"><span class="switch-track"></span><span class="sr-only">Include speaker labels</span></label>
+        </div>
+        <div class="toggle-row full-width">
+          <div><strong>Translate to English</strong><small>Translate non-English speech where Whisper supports it.</small></div>
+          <label class="switch"><input id="translate" type="checkbox"><span class="switch-track"></span><span class="sr-only">Translate to English</span></label>
+        </div>
+      </div>
+      <div id="speakerNotice" class="notice info" hidden>Speaker diarization is not currently available in this static browser build. Transcription will continue without speaker labels; you can still add labels manually in the editor.</div>
+      <button id="transcribeBtn" class="primary-button" type="button" disabled><span class="button-star">✦</span><span>Transcribe</span><span class="button-arrow">↗</span></button>
+      <p class="privacy-note"><span>✧</span> Private by design · runs on your device after model download</p>
+    </section>
+
+    <section id="progressCard" class="glass-card progress-card" hidden aria-live="polite">
+      <div class="section-heading"><span class="step">03</span><div><h2 id="progressTitle">Listening to the stars…</h2><p id="progressMessage">Preparing your audio for its journey.</p></div></div>
+      <div class="progress-orbit"><span class="progress-sun"></span><span class="planet"></span><span class="orbit-line"></span></div>
+      <div class="progress-label"><span id="progressLabel">Preparing</span><strong id="progressPercent">0%</strong></div>
+      <div class="progress-track"><span id="progressBar"></span></div>
+      <p id="engineNote" class="helper-note">The first model download may take a few minutes. It can be cached by your browser for later visits.</p>
+      <div id="processError" class="notice error" role="alert" hidden></div>
+    </section>
+
+    <section id="resultCard" class="glass-card result-card" hidden aria-labelledby="resultTitle">
+      <div class="section-heading"><span class="step">04</span><div><h2 id="resultTitle">Your words, gathered</h2><p>Edit anything you want before exporting.</p></div></div>
+      <div class="result-toolbar"><span id="resultStats">Transcript ready</span><span class="editable-hint">✎ Editable below</span></div>
+      <textarea id="transcript" spellcheck="true" aria-label="Editable transcript" placeholder="Your transcript will appear here…"></textarea>
+      <div id="speakerRenameArea" class="speaker-rename-area" hidden><h3>Rename speakers</h3><p class="helper-note">Speaker labels require diarization, which this build does not provide automatically.</p><div id="speakerInputs"></div></div>
+      <div class="export-row"><button id="copyBtn" class="secondary-button" type="button">Copy text</button><button id="txtBtn" class="secondary-button" type="button">Export TXT</button><button id="srtBtn" class="secondary-button" type="button">Export SRT</button><button id="vttBtn" class="secondary-button" type="button">Export VTT</button></div>
+      <p id="exportMessage" class="helper-note" role="status"></p>
+    </section>
+    <footer><span class="footer-moon">☾</span> Made for quiet minds and curious ears <span class="footer-sep">·</span> Auravia</footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
